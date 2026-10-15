@@ -1,0 +1,11 @@
+SYNTHETIC INVOICE FOR HIRING ASSESSMENT
+(text copied from a scanned page)
+
+Spruce Demo Equipment
+lnvoice no: BTS-005        Invoice date: 2026-09-18
+Currency: CAD
+
+Item                     Qty    Price
+Demo tripod stand         1     1?5.00
+
+Balance owing: 1?5.00

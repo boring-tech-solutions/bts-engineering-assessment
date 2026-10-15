@@ -1,0 +1,16 @@
+SYNTHETIC INVOICE FOR HIRING ASSESSMENT
+
+Prairie Demo Supplies Ltd.
+4410 Example Avenue, Edmonton AB
+
+Bill to: Boreal Demo Co-op
+Invoice #: INV-000417
+Issued: 2026-09-14
+Terms: Net 30
+
+  Office chairs (2)                100.00
+  Delivery                          19.52
+  -----------------------------------------
+  Subtotal                         119.52
+  GST 5%                             5.98
+  Amount due (CAD)                 125.50

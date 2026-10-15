@@ -1,0 +1,11 @@
+SYNTHETIC INVOICE FOR HIRING ASSESSMENT
+=========================================
+Meadow Demo Consulting | Invoice
+-----------------------------------------
+No.        BTS-004
+Dated      2026-02-30
+Client     Willow Demo Foundation
+-----------------------------------------
+Strategy workshop (half day)       90.00
+-----------------------------------------
+TOTAL DUE                    USD   90.00
