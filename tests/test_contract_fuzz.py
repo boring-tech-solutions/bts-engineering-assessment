@@ -51,7 +51,9 @@ def random_entry(rng: random.Random, text: str):
     if rng.random() < 0.1:
         return random_value(rng, text)
     entry = {"value": random_value(rng, text), "status": rng.choice(STATUSES), "reason": rng.choice(["", "x.", None, 3])}
-    if rng.random() < 0.6:
+    if rng.random() < 0.15:
+        entry["candidates"] = [entry["value"], entry["value"]]  # An incomplete list that looks like agreement.
+    elif rng.random() < 0.6:
         entry["candidates"] = [random_value(rng, text) for _ in range(rng.randint(0, 3))]
     elif rng.random() < 0.2:
         entry["candidates"] = random_value(rng, text)
@@ -88,6 +90,19 @@ def random_reply(rng: random.Random, text: str):
 
 class ContractFuzzTests(unittest.TestCase):
     CASES = 4000
+
+    def assert_only_stricter_than_model(self, result: dict, reply):
+        """Code may reject what the model found, never accept what the model did not report as found."""
+        try:
+            extraction = json.loads(reply)
+        except (TypeError, ValueError):
+            return
+        if not isinstance(extraction, dict):
+            return
+        for field in FIELDS:
+            entry = extraction.get(field)
+            if isinstance(entry, dict) and entry.get("status") != "found":
+                self.assertIsNone(result[field], f"{field} accepted although the model said {entry.get('status')!r}")
 
     def assert_contract(self, result: dict, text: str):
         self.assertEqual(set(result), {*FIELDS, "status", "issues"})
@@ -133,6 +148,7 @@ class ContractFuzzTests(unittest.TestCase):
                 with patch("solution.ask_model", return_value=reply):
                     result = process_invoice(text)
                 self.assert_contract(result, text)
+                self.assert_only_stricter_than_model(result, reply)
 
     def test_corrupted_careful_replies_never_break_the_contract(self):
         rng = random.Random(16102026)
@@ -145,6 +161,7 @@ class ContractFuzzTests(unittest.TestCase):
                 with patch("solution.ask_model", return_value=reply):
                     result = process_invoice(text)
                 self.assert_contract(result, text)
+                self.assert_only_stricter_than_model(result, reply)
                 if untouched and LABELS[name].get("status") == "ready":
                     self.assertEqual(result["status"], "ready")
             statuses.append(result["status"])

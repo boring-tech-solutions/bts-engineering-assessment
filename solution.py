@@ -52,7 +52,7 @@ For every field return {"candidates": [...], "value": ..., "status": ..., "reaso
 - "status" is one of:
   - "found": every candidate is the same value. Copy it exactly as written. Do not repair, reformat or normalise it, even if it looks wrong.
   - "missing": the invoice does not state it. value must be null.
-  - "conflicting": the candidates contain two or more different values. value must be null; reason names the values.
+  - "conflicting": the candidates contain two or more different values. value must be null; reason names the values. Amounts that are equal as numbers, such as "125.50", "125.5" and "$125.50", are the same value, not a conflict.
   - "unreadable": the value is damaged or illegible (for example OCR noise such as "1?5.00"). value must be null.
 - "reason": a short explanation, or "" when status is "found".
 
@@ -117,7 +117,12 @@ def parse_reply(reply: object) -> dict | None:
 
 
 def _check_field(field: str, entry: object, invoice_text: str) -> CheckResult:
-    """Decide one field from its model entry, trusting only values the invoice supports."""
+    """Decide one field from its model entry, trusting only values the invoice supports.
+
+    The code may only be stricter than the model: it can reject a value the model
+    found, but never accept a field the model did not report as found, because a
+    candidate list that looks consistent may simply be incomplete.
+    """
     if entry is None:
         return None, "missing from the model response."
     status, value, reason, candidates = _read_entry(field, entry)
@@ -142,13 +147,8 @@ def _read_entry(field: str, entry: object) -> tuple:
     """Split an entry into (status, value, reason, distinct candidates); a bare value counts as found."""
     if not isinstance(entry, dict):
         return "found", entry, "", []
-    listed = entry.get("candidates")
-    candidates = _distinct_candidates(field, listed)
-    status, value = entry.get("status"), entry.get("value")
-    # The model sometimes calls equal values a conflict (125.50 vs 125.5); if they agree, so do we.
-    if status == "conflicting" and len(candidates) == 1 and isinstance(listed, list) and len(listed) > 1:
-        status, value = "found", candidates[0]
-    return status, value, entry.get("reason"), candidates
+    candidates = _distinct_candidates(field, entry.get("candidates"))
+    return entry.get("status"), entry.get("value"), entry.get("reason"), candidates
 
 
 def _distinct_candidates(field: str, candidates: object) -> list[str]:

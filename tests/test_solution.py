@@ -143,19 +143,22 @@ class ExtractionTests(unittest.TestCase):
             "invoice_number: conflicting values in the invoice ('BTS-03', 'BTS-030')."
         ])
 
-    def test_model_conflict_between_equal_values_is_overruled(self):
-        total = {"value": None, "status": "conflicting", "reason": "125.50 vs 125.5", "candidates": ["125.50", "$125.5"]}
-        number = {"value": None, "status": "conflicting", "reason": "",
-                  "candidates": ["INV-000417", "Invoice #: INV-000417"]}
+    def test_model_conflict_is_kept_even_when_its_candidate_list_is_incomplete(self):
+        # Live run on e05: the model said "conflicting" but listed 310.00 twice and left out 301.00.
+        invoice = (FIXTURES.parent / "tests" / "eval_invoices" / "e05_conflicting_totals.txt").read_text(encoding="utf-8")
+        for candidates in (["310.00", "310.00"], ["310.00", "Total due: 310.00"]):
+            with self.subTest(candidates=candidates):
+                total = {"value": None, "status": "conflicting", "reason": "310.00 vs 301.00", "candidates": candidates}
+                reply = model_reply(supplier="Juniper Demo Catering", invoice_number="JDC-5521",
+                                    date="2026-04-18", currency="USD", total=total)
 
-        result = run_with_reply(fixture("invoice_01.txt"),
-                                model_reply(**dict(INVOICE_01_FIELDS, total=total, invoice_number=number)))
+                result = run_with_reply(invoice, reply)
 
-        self.assertEqual(result["total"], 125.5)
-        self.assertEqual(result["invoice_number"], "INV-000417")
-        self.assertEqual(result["status"], "ready")
+                self.assertIsNone(result["total"])
+                self.assertEqual(result["status"], "needs_review")
+                self.assertEqual(result["issues"], ["total: conflicting values in the invoice (310.00 vs 301.00)."])
 
-    def test_model_conflict_without_candidates_is_kept(self):
+    def test_model_conflict_with_a_single_candidate_is_kept(self):
         total = {"value": None, "status": "conflicting", "reason": "two totals", "candidates": ["125.50"]}
 
         result = run_with_reply(fixture("invoice_01.txt"), model_reply(**dict(INVOICE_01_FIELDS, total=total)))
