@@ -1,18 +1,33 @@
 """Extract invoice fields with the model, then verify every value against the invoice text."""
 
+import datetime
 import json
 import re
-from datetime import date as Date
 from decimal import Decimal, InvalidOperation
 
 from model_client import ModelError, ask_model
 
 FIELDS = ("supplier", "invoice_number", "date", "currency", "total")
 
+# (value, issue): value is None whenever issue is set.
+CheckResult = tuple[object, str | None]
+
 DATE_FORMAT = re.compile(r"\d{4}-\d{2}-\d{2}")
 CURRENCY_CODE = re.compile(r"[A-Z]{3}")
+PLAIN_AMOUNT = re.compile(r"\$?\d+(?:\.\d+)?")
 # A plain decimal amount, optionally after "$", not glued to letters, digits, "-", "?" or ".".
 AMOUNT = re.compile(r"(?<![\w.?\-])\$?(\d+(?:\.\d+)?)(?![\w?\-]|\.\d)")
+
+# Active ISO 4217 codes; three capital letters such as GST or BTS are not a currency.
+ISO_4217 = frozenset("""
+AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BRL BSD BTN BWP BYN
+BZD CAD CDF CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS
+GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW
+KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD
+NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD
+SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD UYU UZS VES
+VND VUV WST XAF XCD XCG XOF XPF YER ZAR ZMW ZWG
+""".split())
 
 # Statuses the model uses to say it could not give one trustworthy value.
 PROBLEM_STATUSES = {
@@ -63,46 +78,51 @@ def process_invoice(invoice_text: str) -> dict:
     extraction = parse_reply(reply)
     if extraction is None:
         return _failure("Model response could not be parsed as a JSON object.")
+    if not any(field in extraction for field in FIELDS):
+        return _failure("Model response did not contain any invoice fields.")
 
     result, issues = {}, []
-    for field in FIELDS:
-        value, issue = _check_field(field, extraction.get(field), invoice_text)
-        result[field] = value
-        if issue:
-            issues.append(f"{field}: {issue}")
+    try:
+        for field in FIELDS:
+            value, issue = _check_field(field, extraction.get(field), invoice_text)
+            result[field] = value
+            if issue:
+                issues.append(f"{field}: {issue}")
+    except Exception as exc:
+        # Last line of defence: an odd reply shape must not crash the batch.
+        return _failure(f"Model response had an unexpected shape ({type(exc).__name__}).")
 
     ready = not issues and all(result[field] is not None for field in FIELDS)
     result.update(status="ready" if ready else "needs_review", issues=issues)
     return result
 
 
-def parse_reply(reply) -> dict | None:
-    """Return the JSON object in the model reply, tolerating code fences or extra prose."""
+def parse_reply(reply: object) -> dict | None:
+    """Return the first JSON object in the model reply, tolerating code fences or extra prose."""
     if not isinstance(reply, str):
         return None
-    start, end = reply.find("{"), reply.rfind("}")
-    if start == -1 or end < start:
-        return None
-    try:
-        parsed = json.loads(reply[start:end + 1])
-    except ValueError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    decoder = json.JSONDecoder()
+    start = reply.find("{")
+    while start != -1:
+        try:
+            parsed, _ = decoder.raw_decode(reply, start)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+        start = reply.find("{", start + 1)
+    return None
 
 
-def _check_field(field: str, entry, invoice_text: str):
-    """Return (value, issue) for one field; value is None whenever issue is set."""
+def _check_field(field: str, entry: object, invoice_text: str) -> CheckResult:
+    """Decide one field from its model entry, trusting only values the invoice supports."""
     if entry is None:
         return None, "missing from the model response."
-    if isinstance(entry, dict):
-        status, value, reason = entry.get("status"), entry.get("value"), entry.get("reason")
-        candidates = _distinct_candidates(field, entry.get("candidates"))
-    else:
-        status, value, reason, candidates = "found", entry, "", []
+    status, value, reason, candidates = _read_entry(field, entry)
 
-    if status in PROBLEM_STATUSES:
+    if isinstance(status, str) and status in PROBLEM_STATUSES:
         detail = reason.strip().rstrip(".") if isinstance(reason, str) else ""
-        return None, f"{PROBLEM_STATUSES[status]}" + (f" ({detail})." if detail else ".")
+        return None, PROBLEM_STATUSES[status] + (f" ({detail})." if detail else ".")
     # The model may say "found" yet list two different values; trust the list over the label.
     if len(candidates) > 1:
         listed = ", ".join(repr(candidate) for candidate in candidates)
@@ -113,18 +133,18 @@ def _check_field(field: str, entry, invoice_text: str):
         return None, "model reported it as found but gave no value."
     if field == "total":
         return _check_total(value, invoice_text)
-
-    text, issue = _check_text(value, invoice_text)
-    if issue:
-        return None, issue
-    if field == "date":
-        return _check_date(text)
-    if field == "currency":
-        return _check_currency(text, invoice_text)
-    return text, None
+    return _check_text(field, value, invoice_text)
 
 
-def _distinct_candidates(field: str, candidates) -> list:
+def _read_entry(field: str, entry: object) -> tuple:
+    """Split an entry into (status, value, reason, distinct candidates); a bare value counts as found."""
+    if not isinstance(entry, dict):
+        return "found", entry, "", []
+    candidates = _distinct_candidates(field, entry.get("candidates"))
+    return entry.get("status"), entry.get("value"), entry.get("reason"), candidates
+
+
+def _distinct_candidates(field: str, candidates: object) -> list[str]:
     """Distinct values the model saw for a field, in order; totals compare by decimal value."""
     if not isinstance(candidates, list):
         return []
@@ -132,76 +152,93 @@ def _distinct_candidates(field: str, candidates) -> list:
     for candidate in candidates:
         if isinstance(candidate, bool) or not isinstance(candidate, (str, int, float)):
             continue
-        shown = str(candidate).strip()
-        if not shown:
+        written = str(candidate).strip()
+        if not written:
             continue
-        key = shown
-        if field == "total":
-            try:
-                key = Decimal(shown.removeprefix("$"))
-            except InvalidOperation:
-                pass
+        amount = _parse_amount(written) if field == "total" else None
+        key = amount if amount is not None and amount.is_finite() else written
         if key not in seen:
             seen.add(key)
-            distinct.append(shown)
+            distinct.append(written)
     # "Invoice #: A-1" is A-1 with its label attached, not a second value.
-    return [c for c in distinct if not any(o != c and _contains_token(c, o) for o in distinct)]
+    return [c for c in distinct if not any(other != c and _is_labelled(c, other) for other in distinct)]
 
 
-def _contains_token(text: str, token: str) -> bool:
-    """True if token appears in text without letters or digits glued to either side."""
-    return re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", text) is not None
+def _is_labelled(candidate: str, value: str) -> bool:
+    """True if candidate is value preceded by a label, such as "Invoice #: A-1" for "A-1"."""
+    label = candidate[:-len(value)]
+    return candidate.endswith(value) and label != "" and label[-1] in " \t:#"
 
 
-def _check_text(value, invoice_text: str):
-    """Text values must appear in the invoice exactly as returned, after trimming."""
+def _check_text(field: str, value: object, invoice_text: str) -> CheckResult:
+    """A non-empty string, valid for its field, that appears in the invoice exactly as returned."""
     if not isinstance(value, str) or not value.strip():
         return None, f"expected a non-empty string, got {value!r}."
     text = value.strip()
-    if text not in invoice_text:
+    format_issue = FORMAT_CHECKS[field](text) if field in FORMAT_CHECKS else None
+    if format_issue:
+        return None, format_issue
+    if not _appears_as_token(text, invoice_text):
         return None, f"model value {text!r} does not appear in the invoice text."
     return text, None
 
 
-def _check_date(text: str):
+def _appears_as_token(token: str, text: str) -> bool:
+    """True if token appears in text without a letter, digit or "-" glued to either side."""
+    return re.search(rf"(?<![A-Za-z0-9-]){re.escape(token)}(?![A-Za-z0-9-])", text) is not None
+
+
+def _date_issue(text: str) -> str | None:
     """Dates must already be YYYY-MM-DD and be a real calendar date; never repaired."""
     if not DATE_FORMAT.fullmatch(text):
-        return None, f"{text!r} is not in YYYY-MM-DD format."
+        return f"{text!r} is not in YYYY-MM-DD format."
     try:
-        Date.fromisoformat(text)
+        datetime.date.fromisoformat(text)
     except ValueError:
-        return None, f"{text!r} is not a real calendar date."
-    return text, None
+        return f"{text!r} is not a real calendar date."
+    return None
 
 
-def _check_currency(text: str, invoice_text: str):
-    """Currency must be a three-letter uppercase code written as its own token in the invoice."""
+def _currency_issue(text: str) -> str | None:
+    """Currency must be a three-letter uppercase ISO 4217 code."""
     if not CURRENCY_CODE.fullmatch(text):
-        return None, f"{text!r} is not a three-letter uppercase currency code."
-    if not re.search(rf"(?<![A-Za-z]){text}(?![A-Za-z])", invoice_text):
-        return None, f"model value {text!r} does not appear in the invoice text."
-    return text, None
+        return f"{text!r} is not a three-letter uppercase currency code."
+    if text not in ISO_4217:
+        return f"{text!r} is not a recognised ISO 4217 currency code."
+    return None
 
 
-def _check_total(value, invoice_text: str):
+FORMAT_CHECKS = {"date": _date_issue, "currency": _currency_issue}
+
+
+def _check_total(value: object, invoice_text: str) -> CheckResult:
     """Total must be a finite, nonnegative number equal by decimal value to an amount in the invoice."""
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None, f"{value!r} is not a number."
-    shown = str(value).strip()
-    try:
-        amount = Decimal(shown.removeprefix("$"))
-    except InvalidOperation:
+    written = str(value).strip()
+    amount = _parse_amount(written)
+    if amount is None:
         return None, f"{value!r} is not a number."
     if not amount.is_finite():
-        return None, f"{shown} is not a finite number."
+        return None, f"{written} is not a finite number."
     if amount < 0:
-        return None, f"{shown} must not be negative."
+        return None, f"{written} must not be negative."
+    if not PLAIN_AMOUNT.fullmatch(written):
+        return None, f"{written!r} is not a plain decimal amount."
     if amount not in _amounts_in(invoice_text):
-        return None, f"{shown} does not match any amount written in the invoice."
+        return None, f"{written} does not match any amount written in the invoice."
     return round(float(amount), 2), None
 
 
-def _amounts_in(invoice_text: str) -> set:
+def _parse_amount(written: str) -> Decimal | None:
+    """Decimal value of an amount, ignoring a leading "$"; None if it is not a number."""
+    try:
+        return Decimal(written.removeprefix("$"))
+    except InvalidOperation:
+        return None
+
+
+def _amounts_in(invoice_text: str) -> set[Decimal]:
     """Decimal values of every standalone amount in the text; digits touching OCR noise do not count."""
     return {Decimal(match) for match in AMOUNT.findall(invoice_text)}
 

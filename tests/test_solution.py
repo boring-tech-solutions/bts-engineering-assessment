@@ -143,6 +143,20 @@ class ExtractionTests(unittest.TestCase):
             "invoice_number: conflicting values in the invoice ('BTS-03', 'BTS-030')."
         ])
 
+    def test_identifier_extended_by_a_suffix_is_a_conflict(self):
+        for longer in ("INV-000417-B", "INV-000417/2"):
+            with self.subTest(longer=longer):
+                number = {"value": "INV-000417", "status": "found", "reason": "",
+                          "candidates": ["INV-000417", longer]}
+
+                result = run_with_reply(fixture("invoice_01.txt"),
+                                        model_reply(**dict(INVOICE_01_FIELDS, invoice_number=number)))
+
+                self.assertIsNone(result["invoice_number"])
+                self.assertEqual(result["issues"], [
+                    f"invoice_number: conflicting values in the invoice ('INV-000417', '{longer}')."
+                ])
+
     def test_reason_ending_with_period_is_not_doubled(self):
         unreadable = {"value": None, "status": "unreadable", "reason": "Amount is OCR noise."}
         reply = model_reply(supplier="Spruce Demo Equipment", invoice_number="BTS-005",
@@ -220,6 +234,13 @@ class FieldRuleTests(unittest.TestCase):
 
         self.assert_only_field_rejected(result, "supplier", "expected a non-empty string, got '  '.")
 
+    def test_fragment_of_a_longer_value_is_rejected(self):
+        result = run_with_reply(fixture("invoice_01.txt"),
+                                model_reply(**dict(INVOICE_01_FIELDS, invoice_number="000417")))
+
+        self.assert_only_field_rejected(result, "invoice_number",
+                                        "model value '000417' does not appear in the invoice text.")
+
     def test_impossible_calendar_date_is_rejected(self):
         reply = model_reply(supplier="Meadow Demo Consulting", invoice_number="BTS-004",
                             date="2026-02-30", currency="USD", total="90.00")
@@ -265,6 +286,20 @@ class FieldRuleTests(unittest.TestCase):
 
         self.assert_only_field_rejected(result, "currency", "model value 'CAD' does not appear in the invoice text.")
 
+    def test_currency_code_glued_to_an_identifier_is_rejected(self):
+        invoice = "Acme Ltd.\nInvoice: CAD-1\nDate: 2026-09-14\nTotal due: 10.00\n"
+        reply = model_reply(supplier="Acme Ltd.", invoice_number="CAD-1", date="2026-09-14",
+                            currency="CAD", total="10.00")
+
+        result = run_with_reply(invoice, reply)
+
+        self.assert_only_field_rejected(result, "currency", "model value 'CAD' does not appear in the invoice text.")
+
+    def test_three_capital_letters_that_are_not_a_currency_are_rejected(self):
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**dict(INVOICE_01_FIELDS, currency="GST")))
+
+        self.assert_only_field_rejected(result, "currency", "'GST' is not a recognised ISO 4217 currency code.")
+
     def test_total_guessed_from_ocr_damage_is_rejected(self):
         reply = model_reply(supplier="Spruce Demo Equipment", invoice_number="BTS-005",
                             date="2026-09-18", currency="CAD", total="125.00")
@@ -300,6 +335,8 @@ class FieldRuleTests(unittest.TestCase):
             "NaN": "NaN is not a finite number.",
             "Infinity": "Infinity is not a finite number.",
             "ninety": "'ninety' is not a number.",
+            "9.000E1": "'9.000E1' is not a plain decimal amount.",
+            "9_0.00": "'9_0.00' is not a plain decimal amount.",
             None: "model reported it as found but gave no value.",
         }
         for total, issue in cases.items():
@@ -347,6 +384,45 @@ class ModelFailureTests(unittest.TestCase):
 
         self.assert_all_fields_none(result)
         self.assertEqual(result["issues"], ["Model response could not be parsed as a JSON object."])
+
+
+    def test_object_without_any_invoice_field_is_a_response_failure(self):
+        for reply in ("{}", '{"answer": "see attached"}'):
+            with self.subTest(reply=reply):
+                result = run_with_reply(fixture("invoice_01.txt"), reply)
+
+                self.assert_all_fields_none(result)
+                self.assertEqual(result["issues"], ["Model response did not contain any invoice fields."])
+
+    def test_braces_in_prose_before_the_json_are_skipped(self):
+        reply = "Note {draft}: here is the result. " + model_reply(**INVOICE_01_FIELDS)
+
+        result = run_with_reply(fixture("invoice_01.txt"), reply)
+
+        self.assertEqual(result["status"], "ready")
+
+    def test_unhashable_status_does_not_crash(self):
+        fields = dict(INVOICE_01_FIELDS, date={"value": "2026-09-14", "status": [], "reason": ""})
+
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**fields))
+
+        self.assertIsNone(result["date"])
+        self.assertEqual(result["issues"], ["date: model returned unknown status []."])
+
+    def test_signaling_nan_candidate_does_not_crash(self):
+        total = {"value": "125.50", "status": "found", "reason": "", "candidates": ["125.50", "sNaN"]}
+
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**dict(INVOICE_01_FIELDS, total=total)))
+
+        self.assertIsNone(result["total"])
+        self.assertEqual(result["status"], "needs_review")
+
+    def test_unexpected_failure_while_validating_is_a_response_failure(self):
+        with patch("solution._check_field", side_effect=RuntimeError("boom")):
+            result = run_with_reply(fixture("invoice_01.txt"), model_reply(**INVOICE_01_FIELDS))
+
+        self.assert_all_fields_none(result)
+        self.assertEqual(result["issues"], ["Model response had an unexpected shape (RuntimeError)."])
 
 
 if __name__ == "__main__":
