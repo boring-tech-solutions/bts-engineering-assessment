@@ -1,0 +1,16 @@
+SYNTHETIC EVALUATION INVOICE
+
+BILL TO
+Northwind Demo Traders
+88 Sample Road, Calgary AB
+
+FROM
+Larch Demo Logistics Inc.
+12 Placeholder Street, Red Deer AB
+
+Invoice number: LDL-2026-0091
+Invoice date: 2026-08-03
+
+Freight, Calgary to Red Deer             480.00
+GST 5%                                    24.00
+TOTAL DUE (CAD)                          504.00

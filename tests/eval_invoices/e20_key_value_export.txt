@@ -1,0 +1,7 @@
+supplier_name=Ash Demo Analytics
+customer_name=Elm Demo Retail
+invoice_id=ADA_2026_19
+issued=2026-03-31
+currency=GBP
+line_1=Dashboard setup;1;700.00
+amount_due=700.00

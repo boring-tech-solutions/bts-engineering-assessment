@@ -1,0 +1,10 @@
+SYNTHETIC EVALUATION INVOICE
+
+Poplar Demo Cleaning Co.
+INVOICE PDC-77
+Date: 2026-05-02
+
+Office cleaning, April           260.00
+Total due (CAD)                  260.00
+
+Note: this invoice is dated 2026-05-20. Please pay within 30 days.

@@ -1,0 +1,10 @@
+SYNTHETIC EVALUATION INVOICE
+
+Onyx Demo Electrical
+Invoice No: 00071
+PO number: 5520
+Customer account: 0007
+Invoice date: 2026-10-01
+
+Rewiring, kitchen               410.00
+Total amount due: USD 410.00
