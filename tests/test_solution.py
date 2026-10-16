@@ -94,6 +94,64 @@ class ExtractionTests(unittest.TestCase):
             "invoice_number: conflicting values in the invoice (subject says BTS-003 but body says BTS-030)."
         ])
 
+    def test_conflict_found_in_candidates_overrides_found_status(self):
+        number = {"value": "BTS-030", "status": "found", "reason": "", "candidates": ["BTS-003", "BTS-030"]}
+        reply = model_reply(supplier="Aspen Demo Goods", invoice_number=number,
+                            date="2026-09-16", currency="CAD", total="75.00")
+
+        result = run_with_reply(fixture("invoice_05.txt"), reply)
+
+        self.assertIsNone(result["invoice_number"])
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual(result["issues"], [
+            "invoice_number: conflicting values in the invoice ('BTS-003', 'BTS-030')."
+        ])
+
+    def test_repeated_candidate_with_same_value_is_not_a_conflict(self):
+        total = {"value": "42.00", "status": "found", "reason": "", "candidates": ["$42.00", "42.00", " 42 "]}
+        supplier = {"value": "River Demo Services", "status": "found", "reason": "",
+                    "candidates": ["River Demo Services", "River Demo Services "]}
+        reply = model_reply(supplier=supplier, invoice_number="BTS-002", date="2026-09-15",
+                            currency={"value": None, "status": "missing", "reason": ""}, total=total)
+
+        result = run_with_reply(fixture("invoice_03.txt"), reply)
+
+        self.assertEqual(result["supplier"], "River Demo Services")
+        self.assertEqual(result["total"], 42.0)
+        self.assertEqual(result["issues"], ["currency: not found in the invoice."])
+
+    def test_candidate_with_label_text_is_the_same_value(self):
+        fields = dict(INVOICE_01_FIELDS)
+        fields["invoice_number"] = {"value": "INV-000417", "status": "found", "reason": "",
+                                    "candidates": ["INV-000417", "Invoice #: INV-000417"]}
+        fields["total"] = {"value": "125.50", "status": "found", "reason": "",
+                           "candidates": ["125.50", "Amount due (CAD)   125.50"]}
+
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**fields))
+
+        self.assertEqual(result["status"], "ready")
+
+    def test_longer_identifier_is_not_mistaken_for_a_label(self):
+        number = {"value": "BTS-03", "status": "found", "reason": "", "candidates": ["BTS-03", "BTS-030"]}
+        reply = model_reply(supplier="Aspen Demo Goods", invoice_number=number,
+                            date="2026-09-16", currency="CAD", total="75.00")
+
+        result = run_with_reply(fixture("invoice_05.txt"), reply)
+
+        self.assertIsNone(result["invoice_number"])
+        self.assertEqual(result["issues"], [
+            "invoice_number: conflicting values in the invoice ('BTS-03', 'BTS-030')."
+        ])
+
+    def test_reason_ending_with_period_is_not_doubled(self):
+        unreadable = {"value": None, "status": "unreadable", "reason": "Amount is OCR noise."}
+        reply = model_reply(supplier="Spruce Demo Equipment", invoice_number="BTS-005",
+                            date="2026-09-18", currency="CAD", total=unreadable)
+
+        result = run_with_reply(fixture("invoice_04.txt"), reply)
+
+        self.assertEqual(result["issues"], ["total: unreadable in the invoice (Amount is OCR noise)."])
+
     def test_unreadable_field_without_reason_gets_generic_issue(self):
         unreadable = {"value": None, "status": "unreadable", "reason": ""}
         reply = model_reply(supplier="Spruce Demo Equipment", invoice_number="BTS-005",
