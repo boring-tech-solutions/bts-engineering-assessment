@@ -35,16 +35,18 @@ def _words(*phrases: str) -> re.Pattern:
     return re.compile(r"(?<![A-Za-z])(?:" + "|".join(phrases) + r")(?![A-Za-z])", re.IGNORECASE)
 
 
-# Per field: (labels that name a different field, labels that name this one). A value that only
-# appears under a different field's label is the wrong value, such as the customer after "Bill to"
-# or a subtotal. Only unambiguous labels are listed, so an unfamiliar layout is kept, not rejected.
+# Labels that name a different field. A value that only appears under one of them is the wrong
+# value, such as the customer after "Bill to" or a purchase order number. A label that names both
+# this field and another ("Invoice PO number") is ambiguous and is treated the same way.
+# Only unambiguous words are listed, so an unfamiliar layout is kept, not rejected.
+# Deliberately not handled (left to the prompt and measured by evaluate.py): a wrong value under a
+# plausible label, such as "Invoice total" before a payment, and real values whose label starts
+# with another field's word, which go to review. Rules are only added when they make results
+# stricter or the code simpler.
 ROLE_LABELS = {
-    "supplier": (_words(r"bill(?:ed)? to", r"invoice (?:to|for)", "sold to", "ship to", "client", "customer"),
-                 _words("from", "remit", "issued by", "supplier", "vendor", "seller")),
-    "invoice_number": (_words("po", r"p\.o\.", "purchase order", "order", "account", "customer"),
-                       _words("invoice")),
-    "date": (_words("due", r"pay(?:able)? by", "delivery", r"ship(?:ped)?", "order"),
-             _words("invoice date", "issue date", "issued", "dated")),
+    "supplier": _words(r"bill(?:ed)? to", r"invoice (?:to|for)", "sold to", "ship to", "client", "customer"),
+    "invoice_number": _words("po", r"p\.o\.", "purchase order", "order", "account", "customer"),
+    "date": _words("due", r"pay(?:able)? by", "delivery", r"ship(?:ped)?", "order"),
 }
 # Totals read differently: "Total (incl. GST)" and "Cost after tax" are totals, so a label names
 # another amount only when it starts with that amount's name ("Subtotal", "GST 5%", "Deposit"),
@@ -252,7 +254,7 @@ def _label_at(lines: list[str], row: int, column: int) -> tuple[str, bool]:
 
 
 def _names_other_field(field: str, label: str, heading: bool) -> bool:
-    """True if label names a different field; a label that also names this field (e.g. "Total (incl. GST)") does not.
+    """True if label names a different field, even if it also names this one.
 
     A heading on the line above counts only when it is nothing but the label ("BILL TO"),
     so a title such as "INVOICE FOR HIRING ASSESSMENT" is not read as "invoice for".
@@ -262,11 +264,9 @@ def _names_other_field(field: str, label: str, heading: bool) -> bool:
         if heading:
             return bool(TOTAL_OTHER_START.fullmatch(name))
         return bool(TOTAL_OTHER_START.match(name) or TOTAL_NEGATED.search(name))
-    other, own = ROLE_LABELS[field]
-    if heading:
-        return bool(other.fullmatch(name)) or (field == "supplier" and name.lower() == "to")
     bare_to = field == "supplier" and name.lower() == "to"
-    return bool(bare_to or other.search(label)) and not own.search(label)
+    other = ROLE_LABELS[field]
+    return bare_to or bool(other.fullmatch(name) if heading else other.search(name))
 
 
 def _date_issue(text: str) -> str | None:

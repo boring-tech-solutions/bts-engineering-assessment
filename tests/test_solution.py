@@ -609,10 +609,45 @@ class RoleLabelTests(unittest.TestCase):
                 self.assert_wrong_role(result, "total", f"77.70 only appears after {label!r}, which labels a different field.")
 
     def test_known_limit_total_named_after_a_tax_is_accepted(self):
-        # "Total VAT" is the VAT amount, but its label reads like a total; only evaluation can catch this.
-        result = run_with_reply(*self.total_line_invoice("Total VAT"))
+        # These are the tax amount, but the label reads like a total; only evaluation can catch this.
+        for label in ("Total VAT", "Total GST", "Total tax"):
+            with self.subTest(label=label):
+                result = run_with_reply(*self.total_line_invoice(label))
 
-        self.assertEqual(result["status"], "ready")
+                self.assertEqual(result["status"], "ready")
+
+    def test_known_limit_total_label_starting_with_a_tax_word_goes_to_review(self):
+        # Real totals, rejected because the label starts with another amount's name. This is the
+        # safe direction, so it is accepted rather than patched with more label rules.
+        for label in ("Tax invoice total", "GST inclusive total", "VAT incl. total", "Deposit balance due"):
+            with self.subTest(label=label):
+                result = run_with_reply(*self.total_line_invoice(label))
+
+                self.assertIsNone(result["total"])
+                self.assertEqual(result["status"], "needs_review")
+
+    @staticmethod
+    def number_line_invoice(label: str) -> tuple[str, str]:
+        """An invoice whose only statement of 5520 is the given label, and a reply choosing 5520."""
+        invoice = f"Acme Ltd.\nInvoice: A-1\nDate: 2026-09-14\nTotal due: 77.70 CAD\n{label} 5520\n"
+        reply = model_reply(supplier="Acme Ltd.", invoice_number="5520", date="2026-09-14", currency="CAD", total="77.70")
+        return invoice, reply
+
+    def test_label_naming_another_field_is_rejected_even_if_it_also_names_this_one(self):
+        for label in ("Invoice PO number:", "Invoice for order #:", "PO / invoice ref:"):
+            with self.subTest(label=label):
+                result = run_with_reply(*self.number_line_invoice(label))
+
+                self.assert_wrong_role(result, "invoice_number",
+                                       f"'5520' only appears after {label!r}, which labels a different field.")
+
+    def test_ambiguous_label_goes_to_review_even_when_the_value_is_right(self):
+        # "Customer invoice no:" is a real invoice number, but the label also names the customer.
+        # Sending an ambiguous label to review is the deliberate, safe trade-off.
+        result = run_with_reply(*self.number_line_invoice("Customer invoice no:"))
+
+        self.assertIsNone(result["invoice_number"])
+        self.assertEqual(result["status"], "needs_review")
 
     def test_po_and_account_numbers_are_not_the_invoice_number(self):
         for number, label in (("5520", "PO number:"), ("0007", "Customer account:")):
