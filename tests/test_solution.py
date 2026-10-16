@@ -143,6 +143,26 @@ class ExtractionTests(unittest.TestCase):
             "invoice_number: conflicting values in the invoice ('BTS-03', 'BTS-030')."
         ])
 
+    def test_model_conflict_between_equal_values_is_overruled(self):
+        total = {"value": None, "status": "conflicting", "reason": "125.50 vs 125.5", "candidates": ["125.50", "$125.5"]}
+        number = {"value": None, "status": "conflicting", "reason": "",
+                  "candidates": ["INV-000417", "Invoice #: INV-000417"]}
+
+        result = run_with_reply(fixture("invoice_01.txt"),
+                                model_reply(**dict(INVOICE_01_FIELDS, total=total, invoice_number=number)))
+
+        self.assertEqual(result["total"], 125.5)
+        self.assertEqual(result["invoice_number"], "INV-000417")
+        self.assertEqual(result["status"], "ready")
+
+    def test_model_conflict_without_candidates_is_kept(self):
+        total = {"value": None, "status": "conflicting", "reason": "two totals", "candidates": ["125.50"]}
+
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**dict(INVOICE_01_FIELDS, total=total)))
+
+        self.assertIsNone(result["total"])
+        self.assertEqual(result["issues"], ["total: conflicting values in the invoice (two totals)."])
+
     def test_identifier_extended_by_a_suffix_is_a_conflict(self):
         for longer in ("INV-000417-B", "INV-000417/2"):
             with self.subTest(longer=longer):
@@ -241,6 +261,19 @@ class FieldRuleTests(unittest.TestCase):
         self.assert_only_field_rejected(result, "invoice_number",
                                         "model value '000417' does not appear in the invoice text.")
 
+    def test_fragment_cut_before_a_non_ascii_letter_is_rejected(self):
+        invoice = "Caf\u00e9 Demo Roasters\nInvoice: CDR_7\nDate: 2026-09-14\nTotal due: 10.00 CAD\n"
+        for field, fragment in (("supplier", "Caf"), ("invoice_number", "CDR")):
+            with self.subTest(field=field):
+                fields = dict(supplier="Caf\u00e9 Demo Roasters", invoice_number="CDR_7", date="2026-09-14",
+                              currency="CAD", total="10.00")
+                fields[field] = fragment
+
+                result = run_with_reply(invoice, model_reply(**fields))
+
+                self.assert_only_field_rejected(result, field,
+                                                f"model value {fragment!r} does not appear in the invoice text.")
+
     def test_impossible_calendar_date_is_rejected(self):
         reply = model_reply(supplier="Meadow Demo Consulting", invoice_number="BTS-004",
                             date="2026-02-30", currency="USD", total="90.00")
@@ -259,6 +292,29 @@ class FieldRuleTests(unittest.TestCase):
         result = run_with_reply(invoice, reply)
 
         self.assert_only_field_rejected(result, "date", "'14/09/2026' is not in YYYY-MM-DD format.")
+
+    def test_date_with_non_ascii_digits_is_not_yyyy_mm_dd(self):
+        fullwidth_date = "\uff12\uff10\uff12\uff16-09-14"
+        invoice = f"Acme Ltd.\nInvoice: A-1\nDate: {fullwidth_date}\nTotal due: 10.00 CAD\n"
+        reply = model_reply(supplier="Acme Ltd.", invoice_number="A-1", date=fullwidth_date,
+                            currency="CAD", total="10.00")
+
+        result = run_with_reply(invoice, reply)
+
+        self.assert_only_field_rejected(result, "date", f"{fullwidth_date!r} is not in YYYY-MM-DD format.")
+
+    def test_amount_with_non_ascii_digits_is_not_a_plain_amount(self):
+        fullwidth_total = "\uff14\uff12.00"
+        invoice = f"Acme Ltd.\nInvoice: A-1\nDate: 2026-09-14\nTotal due: {fullwidth_total} CAD\n"
+        for total, issue in ((fullwidth_total, f"{fullwidth_total!r} is not a plain decimal amount."),
+                             ("42.00", "42.00 does not match any amount written in the invoice.")):
+            with self.subTest(total=total):
+                reply = model_reply(supplier="Acme Ltd.", invoice_number="A-1", date="2026-09-14",
+                                    currency="CAD", total=total)
+
+                result = run_with_reply(invoice, reply)
+
+                self.assert_only_field_rejected(result, "total", issue)
 
     def test_currency_symbol_is_not_a_currency_code(self):
         reply = model_reply(supplier="River Demo Services", invoice_number="BTS-002",
