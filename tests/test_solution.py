@@ -642,12 +642,43 @@ class RoleLabelTests(unittest.TestCase):
                                        f"'5520' only appears after {label!r}, which labels a different field.")
 
     def test_ambiguous_label_goes_to_review_even_when_the_value_is_right(self):
-        # "Customer invoice no:" is a real invoice number, but the label also names the customer.
-        # Sending an ambiguous label to review is the deliberate, safe trade-off.
-        result = run_with_reply(*self.number_line_invoice("Customer invoice no:"))
+        # Each label names the right field and another one. Sending an ambiguous label to review
+        # is the deliberate, safe trade-off, shown here for every field the label check covers.
+        base = dict(supplier="Acme Ltd.", invoice_number="A-1", date="2026-09-14", currency="CAD", total="77.70")
+        cases = (("invoice_number", "Customer invoice no: A-1", "Acme Ltd.\nDate: 2026-09-14\n"),
+                 ("date", "Invoice or delivery date: 2026-09-14", "Acme Ltd.\nInvoice: A-1\n"),
+                 ("supplier", "Seller (client account team): Acme Ltd.", "Invoice: A-1\nDate: 2026-09-14\n"))
+        for field, line, rest in cases:
+            with self.subTest(field=field):
+                result = run_with_reply(f"{rest}Total due: 77.70 CAD\n{line}\n", model_reply(**base))
 
-        self.assertIsNone(result["invoice_number"])
-        self.assertEqual(result["status"], "needs_review")
+                self.assertIsNone(result[field])
+                self.assertEqual(result["status"], "needs_review")
+
+    def test_known_limit_sentence_mentioning_an_order_sends_the_invoice_number_to_review(self):
+        # On a line without columns the label is all the text before the value, so an earlier
+        # "order" in a sentence rejects a real invoice number. Narrowing the label at "." or ","
+        # would fix this but lets "PO no. 5520" through, so the safe direction is kept.
+        for line in ("We appreciate your order. Your invoice number is INV-88.",
+                     "Thanks for the order; please quote INV-88 when paying."):
+            with self.subTest(line=line):
+                invoice = f"Acme Ltd.\nDate: 2026-09-14\nTotal due: 77.70 CAD\n{line}\n"
+                reply = model_reply(supplier="Acme Ltd.", invoice_number="INV-88", date="2026-09-14",
+                                    currency="CAD", total="77.70")
+
+                result = run_with_reply(invoice, reply)
+
+                self.assertIsNone(result["invoice_number"])
+                self.assertEqual(result["status"], "needs_review")
+
+    def test_label_narrowed_at_an_abbreviation_would_let_a_po_number_through(self):
+        # Guards the reason the sentence case above is not fixed by splitting labels at ".".
+        for line in ("PO no. 5520", "Order no. 5520", "Customer acct. 5520"):
+            with self.subTest(line=line):
+                result = run_with_reply(*self.number_line_invoice(line.removesuffix(" 5520")))
+
+                self.assertIsNone(result["invoice_number"])
+                self.assertEqual(result["status"], "needs_review")
 
     def test_po_and_account_numbers_are_not_the_invoice_number(self):
         for number, label in (("5520", "PO number:"), ("0007", "Customer account:")):

@@ -159,7 +159,7 @@ class ContractFuzzTests(unittest.TestCase):
                     result = process_invoice(text)
                 self.assert_contract(result, text)
                 self.assert_only_stricter_than_model(result, reply)
-                if untouched and LABELS[name].get("status") == "ready":
+                if untouched and LABELS[name].get("status") == "ready" and "known_limit" not in LABELS[name]:
                     self.assertEqual(result["status"], "ready")
             statuses.append(result["status"])
         # Guard against a generator that never reaches the accepting paths.

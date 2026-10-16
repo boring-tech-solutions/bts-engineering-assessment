@@ -1,5 +1,5 @@
 {
-  "_comment": "Expected results for evaluate.py. Fields left out of an entry are judgement calls and are not compared.",
+  "_comment": "Expected results for evaluate.py. Fields left out of an entry are judgement calls and are not compared. An entry with known_limit is labelled with the true answer, but the code is known to send it to review for the stated reason.",
   "e01_bill_to_first.txt": {
     "supplier": "Larch Demo Logistics Inc.", "invoice_number": "LDL-2026-0091", "date": "2026-08-03",
     "currency": "CAD", "total": 504.0, "status": "ready"
@@ -89,5 +89,10 @@
   "e23_two_column_header.txt": {
     "supplier": "Alder Demo Medical Supply", "invoice_number": "ADM-5150", "date": "2026-09-30",
     "currency": "CAD", "total": 12.6, "status": "ready"
+  },
+  "e24_email_sentence_with_order.txt": {
+    "supplier": "Larkspur Demo Florist", "invoice_number": "LDF-2026-14", "date": "2026-09-25",
+    "currency": "NZD", "total": 55.0, "status": "ready",
+    "known_limit": "the only invoice number follows 'order' in a sentence, so the label check sends it to review"
   }
 }

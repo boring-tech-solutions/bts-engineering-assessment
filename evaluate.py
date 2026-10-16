@@ -47,9 +47,14 @@ def main(argv=None) -> int:
         mismatches = [score(labels[name], result) for result in runs]
         false_ready = sum(1 for result, diff in zip(runs, mismatches) if diff and result["status"] == "ready")
         passed = sum(1 for diff in mismatches if not diff)
-        totals.update(runs=len(runs), passed=passed, false_ready=false_ready)
+        known_limit = labels[name].get("known_limit")
+        totals.update(runs=len(runs), passed=passed, false_ready=false_ready,
+                      known_limit=(len(runs) - passed) if known_limit else 0)
 
         flag = "FALSE READY" if false_ready else ("ok" if passed == len(runs) else "mismatch")
+        if known_limit and not false_ready:
+            # A pinned limit is expected to mismatch; if it starts passing, the limit is gone.
+            flag = f"known limit: {known_limit}" if passed < len(runs) else "ok (known limit no longer reproduces)"
         print(f"{name:42} {passed}/{len(runs)} {flag}")
         for diff, result in zip(mismatches, runs):
             for line in diff:
@@ -57,7 +62,8 @@ def main(argv=None) -> int:
             if diff and args.show_issues:
                 print(f"      issues: {result['issues']}")
 
-    print(f"\npassed {totals['passed']}/{totals['runs']} runs, false_ready={totals['false_ready']}")
+    print(f"\npassed {totals['passed']}/{totals['runs']} runs, false_ready={totals['false_ready']}, "
+          f"known_limit_runs={totals['known_limit']}")
     return 1 if totals["false_ready"] else 0
 
 
