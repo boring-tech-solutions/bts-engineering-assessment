@@ -158,6 +158,18 @@ class ExtractionTests(unittest.TestCase):
                 self.assertEqual(result["status"], "needs_review")
                 self.assertEqual(result["issues"], ["total: conflicting values in the invoice (310.00 vs 301.00)."])
 
+    def test_bare_value_without_a_status_is_not_accepted(self):
+        invoice, _ = eval_reply("e05_conflicting_totals.txt")
+        reply = json.loads(model_reply(supplier="Juniper Demo Catering", invoice_number="JDC-5521",
+                                       date="2026-04-18", currency="USD"))
+        reply["total"] = "310.00"
+
+        result = run_with_reply(invoice, json.dumps(reply))
+
+        self.assertIsNone(result["total"])
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual(result["issues"], ["total: model gave a value without a status."])
+
     def test_model_conflict_with_a_single_candidate_is_kept(self):
         total = {"value": None, "status": "conflicting", "reason": "two totals", "candidates": ["125.50"]}
 
@@ -336,23 +348,17 @@ class FieldRuleTests(unittest.TestCase):
 
         self.assert_only_field_rejected(result, "currency", "model value 'CAD' does not appear in the invoice text.")
 
-    def test_currency_must_be_a_standalone_code_in_the_text(self):
-        invoice = "Acme Ltd.\nInvoice: CADX-1\nDate: 2026-09-14\nTotal due: 10.00\n"
-        reply = model_reply(supplier="Acme Ltd.", invoice_number="CADX-1", date="2026-09-14",
-                            currency="CAD", total="10.00")
+    def test_currency_code_inside_an_identifier_is_not_a_currency(self):
+        for number in ("CADX-1", "CAD-1"):
+            with self.subTest(invoice_number=number):
+                invoice = f"Acme Ltd.\nInvoice: {number}\nDate: 2026-09-14\nTotal due: 10.00\n"
+                reply = model_reply(supplier="Acme Ltd.", invoice_number=number, date="2026-09-14",
+                                    currency="CAD", total="10.00")
 
-        result = run_with_reply(invoice, reply)
+                result = run_with_reply(invoice, reply)
 
-        self.assert_only_field_rejected(result, "currency", "model value 'CAD' does not appear in the invoice text.")
-
-    def test_currency_code_glued_to_an_identifier_is_rejected(self):
-        invoice = "Acme Ltd.\nInvoice: CAD-1\nDate: 2026-09-14\nTotal due: 10.00\n"
-        reply = model_reply(supplier="Acme Ltd.", invoice_number="CAD-1", date="2026-09-14",
-                            currency="CAD", total="10.00")
-
-        result = run_with_reply(invoice, reply)
-
-        self.assert_only_field_rejected(result, "currency", "model value 'CAD' does not appear in the invoice text.")
+                self.assert_only_field_rejected(result, "currency",
+                                                "model value 'CAD' does not appear in the invoice text.")
 
     def test_three_capital_letters_that_are_not_a_currency_are_rejected(self):
         result = run_with_reply(fixture("invoice_01.txt"), model_reply(**dict(INVOICE_01_FIELDS, currency="GST")))
@@ -477,6 +483,8 @@ class ModelFailureTests(unittest.TestCase):
         self.assertEqual(result["status"], "needs_review")
 
     def test_unexpected_failure_while_validating_is_a_response_failure(self):
+        # No known reply reaches this fallback any more (the fuzz test tries thousands), so the
+        # only way to prove it works is to make a validation step fail on purpose.
         with patch("solution._check_field", side_effect=RuntimeError("boom")):
             result = run_with_reply(fixture("invoice_01.txt"), model_reply(**INVOICE_01_FIELDS))
 
@@ -577,6 +585,34 @@ class RoleLabelTests(unittest.TestCase):
         self.assertIsNone(result["supplier"])
         self.assertIn("supplier: 'Aspen Demo Society' only appears after 'To:', which labels a different field.",
                       result["issues"])
+
+    @staticmethod
+    def total_line_invoice(label: str) -> tuple[str, str]:
+        """An invoice whose only statement of 77.70 is the given label, and a reply choosing 77.70."""
+        invoice = f"Acme Ltd.\nInvoice: A-1\nDate: 2026-09-14\nCurrency: CAD\n\nWidgets            40.00\n{label}            77.70\n"
+        reply = model_reply(supplier="Acme Ltd.", invoice_number="A-1", date="2026-09-14", currency="CAD", total="77.70")
+        return invoice, reply
+
+    def test_total_labels_that_only_mention_another_field_are_kept(self):
+        for label in ("Amount payable now", "Net after discount", "Cost after tax"):
+            with self.subTest(label=label):
+                result = run_with_reply(*self.total_line_invoice(label))
+
+                self.assertEqual(result["total"], 77.7)
+                self.assertEqual(result["status"], "ready")
+
+    def test_total_labels_that_negate_the_total_are_rejected(self):
+        for label in ("Total excluding tax", "Total already paid", "Total (excl. GST)"):
+            with self.subTest(label=label):
+                result = run_with_reply(*self.total_line_invoice(label))
+
+                self.assert_wrong_role(result, "total", f"77.70 only appears after {label!r}, which labels a different field.")
+
+    def test_known_limit_total_named_after_a_tax_is_accepted(self):
+        # "Total VAT" is the VAT amount, but its label reads like a total; only evaluation can catch this.
+        result = run_with_reply(*self.total_line_invoice("Total VAT"))
+
+        self.assertEqual(result["status"], "ready")
 
     def test_po_and_account_numbers_are_not_the_invoice_number(self):
         for number, label in (("5520", "PO number:"), ("0007", "Customer account:")):

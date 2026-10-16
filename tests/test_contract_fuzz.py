@@ -15,7 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
-from solution import FIELDS, ISO_4217, process_invoice
+from solution import FIELDS, ISO_4217, parse_reply, process_invoice
 from test_eval_invoices import EVAL_DIR, LABELS, careful_reply
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,17 +92,14 @@ class ContractFuzzTests(unittest.TestCase):
     CASES = 4000
 
     def assert_only_stricter_than_model(self, result: dict, reply):
-        """Code may reject what the model found, never accept what the model did not report as found."""
-        try:
-            extraction = json.loads(reply)
-        except (TypeError, ValueError):
-            return
-        if not isinstance(extraction, dict):
+        """Code may reject what the model found, never accept a field the model did not report as found."""
+        extraction = parse_reply(reply)
+        if extraction is None:
             return
         for field in FIELDS:
             entry = extraction.get(field)
-            if isinstance(entry, dict) and entry.get("status") != "found":
-                self.assertIsNone(result[field], f"{field} accepted although the model said {entry.get('status')!r}")
+            if not (isinstance(entry, dict) and entry.get("status") == "found"):
+                self.assertIsNone(result[field], f"{field} accepted although the model gave {entry!r}")
 
     def assert_contract(self, result: dict, text: str):
         self.assertEqual(set(result), {*FIELDS, "status", "issues"})

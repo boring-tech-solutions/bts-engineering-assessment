@@ -30,7 +30,6 @@ SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX 
 VND VUV WST XAF XCD XCG XOF XPF YER ZAR ZMW ZWG
 """.split())
 
-# Statuses the model uses to say it could not give one trustworthy value.
 def _words(*phrases: str) -> re.Pattern:
     """Any of the phrases as whole words, ignoring case; digits and "_" count as separators."""
     return re.compile(r"(?<![A-Za-z])(?:" + "|".join(phrases) + r")(?![A-Za-z])", re.IGNORECASE)
@@ -46,12 +45,18 @@ ROLE_LABELS = {
                        _words("invoice")),
     "date": (_words("due", r"pay(?:able)? by", "delivery", r"ship(?:ped)?", "order"),
              _words("invoice date", "issue date", "issued", "dated")),
-    "total": (_words(r"sub-?total", "tax", "gst", "hst", "pst", "vat", "deposit", "paid", "payment received", "discount"),
-              _words("total", "due", "payable", "balance", "owing")),
 }
+# Totals read differently: "Total (incl. GST)" and "Cost after tax" are totals, so a label names
+# another amount only when it starts with that amount's name ("Subtotal", "GST 5%", "Deposit"),
+# or carries a modifier that turns a total into something else ("Total excluding tax").
+TOTAL_OTHER_START = re.compile(
+    r"(?:sub-?total|tax|gst|hst|pst|vat|deposit|discount|paid|amount paid|payment received)(?![A-Za-z])", re.IGNORECASE)
+TOTAL_NEGATED = _words("before tax", r"excl\.?", "excluding", "pre-tax", "paid to date", "already paid")
+ROLE_FIELDS = (*ROLE_LABELS, "total")
 # Columns in a text layout are separated by runs of spaces, tabs or "|".
 COLUMN_GAP = re.compile(r"\s{2,}|\t|\|")
 
+# Statuses the model uses to say it could not give one trustworthy value.
 PROBLEM_STATUSES = {
     "missing": "not found in the invoice",
     "conflicting": "conflicting values in the invoice",
@@ -146,6 +151,8 @@ def _check_field(field: str, entry: object, invoice_text: str) -> CheckResult:
     """
     if entry is None:
         return None, "missing from the model response."
+    if not isinstance(entry, dict):
+        return None, "model gave a value without a status."
     status, value, reason, candidates = _read_entry(field, entry)
 
     if isinstance(status, str) and status in PROBLEM_STATUSES:
@@ -164,10 +171,8 @@ def _check_field(field: str, entry: object, invoice_text: str) -> CheckResult:
     return _check_text(field, value, invoice_text)
 
 
-def _read_entry(field: str, entry: object) -> tuple:
-    """Split an entry into (status, value, reason, distinct candidates); a bare value counts as found."""
-    if not isinstance(entry, dict):
-        return "found", entry, "", []
+def _read_entry(field: str, entry: dict) -> tuple:
+    """Split an entry into (status, value, reason, distinct candidates)."""
     candidates = _distinct_candidates(field, entry.get("candidates"))
     return entry.get("status"), entry.get("value"), entry.get("reason"), candidates
 
@@ -229,7 +234,7 @@ def _wrong_role_label(field: str, invoice_text: str, starts_in) -> str | None:
     starts_in(line) gives the columns where the value starts on that line. One occurrence
     under a neutral or matching label is enough to keep the value.
     """
-    if field not in ROLE_LABELS:
+    if field not in ROLE_FIELDS:
         return None
     lines = invoice_text.splitlines()
     labels = [_label_at(lines, row, column) for row, line in enumerate(lines) for column in starts_in(line)]
@@ -252,8 +257,12 @@ def _names_other_field(field: str, label: str, heading: bool) -> bool:
     A heading on the line above counts only when it is nothing but the label ("BILL TO"),
     so a title such as "INVOICE FOR HIRING ASSESSMENT" is not read as "invoice for".
     """
-    other, own = ROLE_LABELS[field]
     name = label.rstrip(":").strip()
+    if field == "total":
+        if heading:
+            return bool(TOTAL_OTHER_START.fullmatch(name))
+        return bool(TOTAL_OTHER_START.match(name) or TOTAL_NEGATED.search(name))
+    other, own = ROLE_LABELS[field]
     if heading:
         return bool(other.fullmatch(name)) or (field == "supplier" and name.lower() == "to")
     bare_to = field == "supplier" and name.lower() == "to"
