@@ -31,6 +31,27 @@ VND VUV WST XAF XCD XCG XOF XPF YER ZAR ZMW ZWG
 """.split())
 
 # Statuses the model uses to say it could not give one trustworthy value.
+def _words(*phrases: str) -> re.Pattern:
+    """Any of the phrases as whole words, ignoring case; digits and "_" count as separators."""
+    return re.compile(r"(?<![A-Za-z])(?:" + "|".join(phrases) + r")(?![A-Za-z])", re.IGNORECASE)
+
+
+# Per field: (labels that name a different field, labels that name this one). A value that only
+# appears under a different field's label is the wrong value, such as the customer after "Bill to"
+# or a subtotal. Only unambiguous labels are listed, so an unfamiliar layout is kept, not rejected.
+ROLE_LABELS = {
+    "supplier": (_words(r"bill(?:ed)? to", r"invoice (?:to|for)", "sold to", "ship to", "client", "customer"),
+                 _words("from", "remit", "issued by", "supplier", "vendor", "seller")),
+    "invoice_number": (_words("po", r"p\.o\.", "purchase order", "order", "account", "customer"),
+                       _words("invoice")),
+    "date": (_words("due", r"pay(?:able)? by", "delivery", r"ship(?:ped)?", "order"),
+             _words("invoice date", "issue date", "issued", "dated")),
+    "total": (_words(r"sub-?total", "tax", "gst", "hst", "pst", "vat", "deposit", "paid", "payment received", "discount"),
+              _words("total", "due", "payable", "balance", "owing")),
+}
+# Columns in a text layout are separated by runs of spaces, tabs or "|".
+COLUMN_GAP = re.compile(r"\s{2,}|\t|\|")
+
 PROBLEM_STATUSES = {
     "missing": "not found in the invoice",
     "conflicting": "conflicting values in the invoice",
@@ -187,12 +208,56 @@ def _check_text(field: str, value: object, invoice_text: str) -> CheckResult:
         return None, format_issue
     if not _appears_as_token(text, invoice_text):
         return None, f"model value {text!r} does not appear in the invoice text."
+    label = _wrong_role_label(field, invoice_text, lambda line: [m.start() for m in _token_pattern(text).finditer(line)])
+    if label:
+        return None, f"{text!r} only appears after {label!r}, which labels a different field."
     return text, None
 
 
+def _token_pattern(token: str) -> re.Pattern:
+    """token without a letter, digit, "_" or "-" (any script) glued to either side."""
+    return re.compile(rf"(?<![\w-]){re.escape(token)}(?![\w-])")
+
+
 def _appears_as_token(token: str, text: str) -> bool:
-    """True if token appears in text without a letter, digit, "_" or "-" (any script) glued to either side."""
-    return re.search(rf"(?<![\w-]){re.escape(token)}(?![\w-])", text) is not None
+    return _token_pattern(token).search(text) is not None
+
+
+def _wrong_role_label(field: str, invoice_text: str, starts_in) -> str | None:
+    """The label that rules a value out, if every place it appears is labelled as a different field.
+
+    starts_in(line) gives the columns where the value starts on that line. One occurrence
+    under a neutral or matching label is enough to keep the value.
+    """
+    if field not in ROLE_LABELS:
+        return None
+    lines = invoice_text.splitlines()
+    labels = [_label_at(lines, row, column) for row, line in enumerate(lines) for column in starts_in(line)]
+    if labels and all(_names_other_field(field, label, heading) for label, heading in labels):
+        return labels[0][0]
+    return None
+
+
+def _label_at(lines: list[str], row: int, column: int) -> tuple[str, bool]:
+    """(label, is_heading): the last column before the value on its line, else the previous non-empty line."""
+    columns = [part.strip() for part in COLUMN_GAP.split(lines[row][:column]) if part.strip()]
+    if columns:
+        return columns[-1], False
+    return next((line.strip() for line in reversed(lines[:row]) if line.strip()), ""), True
+
+
+def _names_other_field(field: str, label: str, heading: bool) -> bool:
+    """True if label names a different field; a label that also names this field (e.g. "Total (incl. GST)") does not.
+
+    A heading on the line above counts only when it is nothing but the label ("BILL TO"),
+    so a title such as "INVOICE FOR HIRING ASSESSMENT" is not read as "invoice for".
+    """
+    other, own = ROLE_LABELS[field]
+    name = label.rstrip(":").strip()
+    if heading:
+        return bool(other.fullmatch(name)) or (field == "supplier" and name.lower() == "to")
+    bare_to = field == "supplier" and name.lower() == "to"
+    return bool(bare_to or other.search(label)) and not own.search(label)
 
 
 def _date_issue(text: str) -> str | None:
@@ -234,6 +299,10 @@ def _check_total(value: object, invoice_text: str) -> CheckResult:
         return None, f"{written!r} is not a plain decimal amount."
     if amount not in _amounts_in(invoice_text):
         return None, f"{written} does not match any amount written in the invoice."
+    label = _wrong_role_label("total", invoice_text,
+                              lambda line: [m.start() for m in AMOUNT.finditer(line) if Decimal(m.group(1)) == amount])
+    if label:
+        return None, f"{written} only appears after {label!r}, which labels a different field."
     return round(float(amount), 2), None
 
 

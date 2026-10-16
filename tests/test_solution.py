@@ -484,5 +484,108 @@ class ModelFailureTests(unittest.TestCase):
         self.assertEqual(result["issues"], ["Model response had an unexpected shape (RuntimeError)."])
 
 
+EVAL_DIR = FIXTURES.parent / "tests" / "eval_invoices"
+EVAL_LABELS = json.loads((EVAL_DIR / "expected.json").read_text(encoding="utf-8"))
+
+
+def eval_reply(name: str, **overrides) -> tuple[str, str]:
+    """(invoice text, model reply) for an evaluation invoice: its labelled values, with overrides."""
+    fields = {field: EVAL_LABELS[name][field] for field in FIELDS if EVAL_LABELS[name].get(field) is not None}
+    fields.update(overrides)
+    return (EVAL_DIR / name).read_text(encoding="utf-8"), model_reply(**fields)
+
+
+class RoleLabelTests(unittest.TestCase):
+    """A value that appears only under a label for a different field is the wrong value."""
+
+    def assert_wrong_role(self, result, field, issue):
+        self.assertIsNone(result[field])
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual(result["issues"], [f"{field}: {issue}"])
+
+    def test_customer_on_the_same_line_as_bill_to_is_not_the_supplier(self):
+        result = run_with_reply(fixture("invoice_01.txt"),
+                                model_reply(**dict(INVOICE_01_FIELDS, supplier="Boreal Demo Co-op")))
+
+        self.assert_wrong_role(result, "supplier",
+                               "'Boreal Demo Co-op' only appears after 'Bill to:', which labels a different field.")
+
+    def test_subtotal_is_not_the_total(self):
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**dict(INVOICE_01_FIELDS, total="119.52")))
+
+        self.assert_wrong_role(result, "total", "119.52 only appears after 'Subtotal', which labels a different field.")
+
+    def test_customer_under_a_bill_to_heading_is_not_the_supplier(self):
+        result = run_with_reply(*eval_reply("e01_bill_to_first.txt", supplier="Northwind Demo Traders"))
+
+        self.assert_wrong_role(result, "supplier",
+                               "'Northwind Demo Traders' only appears after 'BILL TO', which labels a different field.")
+
+    def test_due_date_is_not_the_invoice_date(self):
+        result = run_with_reply(*eval_reply("e03_issue_and_due_date.txt", date="2026-07-31"))
+
+        self.assert_wrong_role(result, "date", "'2026-07-31' only appears after 'Due date:', which labels a different field.")
+
+    def test_customer_with_a_similar_name_is_not_the_supplier(self):
+        holdings = "Harbour Demo Marine Services Holdings"
+        result = run_with_reply(*eval_reply("e22_customer_named_like_supplier.txt", supplier=holdings))
+
+        self.assert_wrong_role(result, "supplier", f"{holdings!r} only appears after 'Invoice for:', which labels a different field.")
+
+    def test_value_under_its_own_label_is_kept_when_it_also_appears_elsewhere(self):
+        # "Harbour Demo Marine Services" follows both "Invoice from:" and "Invoice for:".
+        result = run_with_reply(*eval_reply("e22_customer_named_like_supplier.txt"))
+
+        self.assertEqual(result["supplier"], "Harbour Demo Marine Services")
+        self.assertEqual(result["status"], "ready")
+
+    def test_nearest_column_decides_the_label(self):
+        result = run_with_reply(*eval_reply("e23_two_column_header.txt"))
+
+        self.assertEqual(result["supplier"], "Alder Demo Medical Supply")
+        self.assertEqual(result["date"], "2026-09-30")
+        self.assertEqual(result["status"], "ready")
+
+    def test_wrong_values_in_a_two_column_header_are_still_caught(self):
+        cases = (("supplier", "Cypress Demo Clinic", "'Cypress Demo Clinic' only appears after 'Bill to:'"),
+                 ("date", "2026-10-30", "'2026-10-30' only appears after 'Due date:'"),
+                 ("total", "0.60", "0.60 only appears after 'GST 5%'"))
+        for field, value, issue in cases:
+            with self.subTest(field=field):
+                result = run_with_reply(*eval_reply("e23_two_column_header.txt", **{field: value}))
+
+                self.assert_wrong_role(result, field, f"{issue}, which labels a different field.")
+
+    def test_total_label_that_mentions_tax_is_still_a_total(self):
+        result = run_with_reply(*eval_reply("e23_two_column_header.txt", total="12.60"))
+
+        self.assertEqual(result["total"], 12.6)
+        self.assertEqual(result["status"], "ready")
+
+    def test_remit_to_names_the_supplier(self):
+        result = run_with_reply(*eval_reply("e13_supplier_in_footer.txt"))
+
+        self.assertEqual(result["supplier"], "Cedar Demo Print Shop")
+        self.assertEqual(result["status"], "ready")
+
+    def test_customer_after_a_bare_to_label_is_not_the_supplier(self):
+        reply = model_reply(supplier="Aspen Demo Society", invoice_number="BTS-002", date="2026-09-15",
+                            currency={"value": None, "status": "missing", "reason": ""}, total="42.00")
+
+        result = run_with_reply(fixture("invoice_03.txt"), reply)
+
+        self.assertIsNone(result["supplier"])
+        self.assertIn("supplier: 'Aspen Demo Society' only appears after 'To:', which labels a different field.",
+                      result["issues"])
+
+    def test_po_and_account_numbers_are_not_the_invoice_number(self):
+        for number, label in (("5520", "PO number:"), ("0007", "Customer account:")):
+            with self.subTest(number=number):
+                result = run_with_reply(*eval_reply("e14_po_and_leading_zeros.txt", invoice_number=number))
+
+                self.assert_wrong_role(result, "invoice_number",
+                                       f"{number!r} only appears after {label!r}, which labels a different field.")
+
+
 if __name__ == "__main__":
     unittest.main()

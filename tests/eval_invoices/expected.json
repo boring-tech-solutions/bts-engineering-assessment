@@ -85,5 +85,9 @@
   "e22_customer_named_like_supplier.txt": {
     "supplier": "Harbour Demo Marine Services", "invoice_number": "HMS-1000", "date": "2026-02-27",
     "currency": "AUD", "total": 275.0, "status": "ready"
+  },
+  "e23_two_column_header.txt": {
+    "supplier": "Alder Demo Medical Supply", "invoice_number": "ADM-5150", "date": "2026-09-30",
+    "currency": "CAD", "total": 12.6, "status": "ready"
   }
 }
