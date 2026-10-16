@@ -100,6 +100,8 @@ def _check_field(field: str, entry, invoice_text: str):
     if status in PROBLEM_STATUSES:
         detail = f" ({reason.strip()})" if isinstance(reason, str) and reason.strip() else ""
         return None, f"{PROBLEM_STATUSES[status]}{detail}."
+    if status != "found":
+        return None, f"model returned unknown status {status!r}."
     if value is None:
         return None, "model reported it as found but gave no value."
     if field == "total":

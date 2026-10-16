@@ -94,6 +94,47 @@ class ExtractionTests(unittest.TestCase):
             "invoice_number: conflicting values in the invoice (subject says BTS-003 but body says BTS-030)."
         ])
 
+    def test_unreadable_field_without_reason_gets_generic_issue(self):
+        unreadable = {"value": None, "status": "unreadable", "reason": ""}
+        reply = model_reply(supplier="Spruce Demo Equipment", invoice_number="BTS-005",
+                            date="2026-09-18", currency="CAD", total=unreadable)
+
+        result = run_with_reply(fixture("invoice_04.txt"), reply)
+
+        self.assertEqual(result["currency"], "CAD")
+        self.assertIsNone(result["total"])
+        self.assertEqual(result["issues"], ["total: unreadable in the invoice."])
+
+    def test_unknown_status_is_not_trusted(self):
+        fields = dict(INVOICE_01_FIELDS, date={"value": "2026-09-14", "status": "probably", "reason": ""})
+
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**fields))
+
+        self.assertIsNone(result["date"])
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual(result["issues"], ["date: model returned unknown status 'probably'."])
+
+    def test_every_problem_is_listed_in_field_order(self):
+        reply = model_reply(supplier="River Demo Services", invoice_number="BTS-200",
+                            date="2026-09-15", currency={"value": None, "status": "missing", "reason": "only $ is shown"},
+                            total="42.00")
+
+        result = run_with_reply(fixture("invoice_03.txt"), reply)
+
+        self.assertEqual(result["issues"], [
+            "invoice_number: model value 'BTS-200' does not appear in the invoice text.",
+            "currency: not found in the invoice (only $ is shown).",
+        ])
+
+    def test_prompt_sends_the_invoice_text(self):
+        invoice = fixture("invoice_01.txt")
+        with patch("solution.ask_model", return_value=model_reply(**INVOICE_01_FIELDS)) as ask:
+            process_invoice(invoice)
+
+        prompt = ask.call_args.args[0]
+        self.assertIn(invoice, prompt)
+        self.assertIn("conflicting", prompt)
+
     def test_field_missing_from_reply_becomes_none(self):
         fields = dict(INVOICE_01_FIELDS)
         del fields["supplier"]
