@@ -105,6 +105,114 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(result["issues"], ["supplier: missing from the model response."])
 
 
+class FieldRuleTests(unittest.TestCase):
+    def assert_only_field_rejected(self, result, field, issue):
+        self.assertIsNone(result[field])
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual(result["issues"], [f"{field}: {issue}"])
+
+    def test_non_string_text_value_is_rejected(self):
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**dict(INVOICE_01_FIELDS, supplier=123)))
+
+        self.assert_only_field_rejected(result, "supplier", "expected a non-empty string, got 123.")
+
+    def test_blank_text_value_is_rejected(self):
+        result = run_with_reply(fixture("invoice_01.txt"), model_reply(**dict(INVOICE_01_FIELDS, supplier="  ")))
+
+        self.assert_only_field_rejected(result, "supplier", "expected a non-empty string, got '  '.")
+
+    def test_impossible_calendar_date_is_rejected(self):
+        reply = model_reply(supplier="Meadow Demo Consulting", invoice_number="BTS-004",
+                            date="2026-02-30", currency="USD", total="90.00")
+
+        result = run_with_reply(fixture("invoice_02.txt"), reply)
+
+        self.assertEqual(result["invoice_number"], "BTS-004")
+        self.assertEqual(result["total"], 90.0)
+        self.assert_only_field_rejected(result, "date", "'2026-02-30' is not a real calendar date.")
+
+    def test_date_in_another_format_is_not_converted(self):
+        invoice = "Acme Ltd.\nInvoice: A-1\nDate: 14/09/2026\nTotal due: 10.00 CAD\n"
+        reply = model_reply(supplier="Acme Ltd.", invoice_number="A-1", date="14/09/2026",
+                            currency="CAD", total="10.00")
+
+        result = run_with_reply(invoice, reply)
+
+        self.assert_only_field_rejected(result, "date", "'14/09/2026' is not in YYYY-MM-DD format.")
+
+    def test_currency_symbol_is_not_a_currency_code(self):
+        reply = model_reply(supplier="River Demo Services", invoice_number="BTS-002",
+                            date="2026-09-15", currency="$", total="42.00")
+
+        result = run_with_reply(fixture("invoice_03.txt"), reply)
+
+        self.assertEqual(result["total"], 42.0)
+        self.assert_only_field_rejected(result, "currency", "'$' is not a three-letter uppercase currency code.")
+
+    def test_currency_inferred_from_location_is_rejected(self):
+        reply = model_reply(supplier="River Demo Services", invoice_number="BTS-002",
+                            date="2026-09-15", currency="CAD", total="42.00")
+
+        result = run_with_reply(fixture("invoice_03.txt"), reply)
+
+        self.assert_only_field_rejected(result, "currency", "model value 'CAD' does not appear in the invoice text.")
+
+    def test_currency_must_be_a_standalone_code_in_the_text(self):
+        invoice = "Acme Ltd.\nInvoice: CADX-1\nDate: 2026-09-14\nTotal due: 10.00\n"
+        reply = model_reply(supplier="Acme Ltd.", invoice_number="CADX-1", date="2026-09-14",
+                            currency="CAD", total="10.00")
+
+        result = run_with_reply(invoice, reply)
+
+        self.assert_only_field_rejected(result, "currency", "model value 'CAD' does not appear in the invoice text.")
+
+    def test_total_guessed_from_ocr_damage_is_rejected(self):
+        reply = model_reply(supplier="Spruce Demo Equipment", invoice_number="BTS-005",
+                            date="2026-09-18", currency="CAD", total="125.00")
+
+        result = run_with_reply(fixture("invoice_04.txt"), reply)
+
+        self.assert_only_field_rejected(result, "total", "125.00 does not match any amount written in the invoice.")
+
+    def test_digits_inside_a_damaged_amount_are_not_an_amount(self):
+        reply = model_reply(supplier="Spruce Demo Equipment", invoice_number="BTS-005",
+                            date="2026-09-18", currency="CAD", total="5.00")
+
+        result = run_with_reply(fixture("invoice_04.txt"), reply)
+
+        self.assert_only_field_rejected(result, "total", "5.00 does not match any amount written in the invoice.")
+
+    def test_total_as_number_or_dollar_string_matches_by_decimal_value(self):
+        for total in (42, 42.0, "42", "$42.00"):
+            with self.subTest(total=total):
+                reply = model_reply(supplier="River Demo Services", invoice_number="BTS-002",
+                                    date="2026-09-15", currency={"value": None, "status": "missing", "reason": ""},
+                                    total=total)
+
+                result = run_with_reply(fixture("invoice_03.txt"), reply)
+
+                self.assertEqual(result["total"], 42.0)
+                self.assertIsInstance(result["total"], float)
+
+    def test_invalid_total_values_are_rejected(self):
+        cases = {
+            True: "True is not a number.",
+            "-90.00": "-90.00 must not be negative.",
+            "NaN": "NaN is not a finite number.",
+            "Infinity": "Infinity is not a finite number.",
+            "ninety": "'ninety' is not a number.",
+            None: "model reported it as found but gave no value.",
+        }
+        for total, issue in cases.items():
+            with self.subTest(total=total):
+                reply = model_reply(supplier="Meadow Demo Consulting", invoice_number="BTS-004",
+                                    date="2026-02-28", currency="USD", total=total)
+
+                result = run_with_reply(fixture("invoice_02.txt").replace("2026-02-30", "2026-02-28"), reply)
+
+                self.assert_only_field_rejected(result, "total", issue)
+
+
 class ModelFailureTests(unittest.TestCase):
     def assert_all_fields_none(self, result):
         for field in FIELDS:

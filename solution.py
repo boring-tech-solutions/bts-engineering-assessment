@@ -1,11 +1,18 @@
 """Extract invoice fields with the model, then verify every value against the invoice text."""
 
 import json
-from decimal import Decimal
+import re
+from datetime import date as Date
+from decimal import Decimal, InvalidOperation
 
 from model_client import ModelError, ask_model
 
 FIELDS = ("supplier", "invoice_number", "date", "currency", "total")
+
+DATE_FORMAT = re.compile(r"\d{4}-\d{2}-\d{2}")
+CURRENCY_CODE = re.compile(r"[A-Z]{3}")
+# A plain decimal amount, optionally after "$", not glued to letters, digits, "-", "?" or ".".
+AMOUNT = re.compile(r"(?<![\w.?\-])\$?(\d+(?:\.\d+)?)(?![\w?\-]|\.\d)")
 
 # Statuses the model uses to say it could not give one trustworthy value.
 PROBLEM_STATUSES = {
@@ -93,17 +100,72 @@ def _check_field(field: str, entry, invoice_text: str):
     if status in PROBLEM_STATUSES:
         detail = f" ({reason.strip()})" if isinstance(reason, str) and reason.strip() else ""
         return None, f"{PROBLEM_STATUSES[status]}{detail}."
+    if value is None:
+        return None, "model reported it as found but gave no value."
     if field == "total":
-        return round(float(Decimal(str(value))), 2), None
-    return _check_text(value, invoice_text)
+        return _check_total(value, invoice_text)
+
+    text, issue = _check_text(value, invoice_text)
+    if issue:
+        return None, issue
+    if field == "date":
+        return _check_date(text)
+    if field == "currency":
+        return _check_currency(text, invoice_text)
+    return text, None
 
 
 def _check_text(value, invoice_text: str):
     """Text values must appear in the invoice exactly as returned, after trimming."""
+    if not isinstance(value, str) or not value.strip():
+        return None, f"expected a non-empty string, got {value!r}."
     text = value.strip()
     if text not in invoice_text:
         return None, f"model value {text!r} does not appear in the invoice text."
     return text, None
+
+
+def _check_date(text: str):
+    """Dates must already be YYYY-MM-DD and be a real calendar date; never repaired."""
+    if not DATE_FORMAT.fullmatch(text):
+        return None, f"{text!r} is not in YYYY-MM-DD format."
+    try:
+        Date.fromisoformat(text)
+    except ValueError:
+        return None, f"{text!r} is not a real calendar date."
+    return text, None
+
+
+def _check_currency(text: str, invoice_text: str):
+    """Currency must be a three-letter uppercase code written as its own token in the invoice."""
+    if not CURRENCY_CODE.fullmatch(text):
+        return None, f"{text!r} is not a three-letter uppercase currency code."
+    if not re.search(rf"(?<![A-Za-z]){text}(?![A-Za-z])", invoice_text):
+        return None, f"model value {text!r} does not appear in the invoice text."
+    return text, None
+
+
+def _check_total(value, invoice_text: str):
+    """Total must be a finite, nonnegative number equal by decimal value to an amount in the invoice."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None, f"{value!r} is not a number."
+    shown = str(value).strip()
+    try:
+        amount = Decimal(shown.removeprefix("$"))
+    except InvalidOperation:
+        return None, f"{value!r} is not a number."
+    if not amount.is_finite():
+        return None, f"{shown} is not a finite number."
+    if amount < 0:
+        return None, f"{shown} must not be negative."
+    if amount not in _amounts_in(invoice_text):
+        return None, f"{shown} does not match any amount written in the invoice."
+    return round(float(amount), 2), None
+
+
+def _amounts_in(invoice_text: str) -> set:
+    """Decimal values of every standalone amount in the text; digits touching OCR noise do not count."""
+    return {Decimal(match) for match in AMOUNT.findall(invoice_text)}
 
 
 def _failure(issue: str) -> dict:
