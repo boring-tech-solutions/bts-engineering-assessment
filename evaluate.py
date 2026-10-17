@@ -26,6 +26,21 @@ def score(expected: dict, result: dict) -> list[str]:
     ]
 
 
+def unexplained_mismatches(expected: dict, result: dict) -> list[str]:
+    """Labelled keys that disagree with the label and are not explained by its known limit.
+
+    A known limit explains a field in known_limit_fields coming back as None, and the
+    status coming back as needs_review. Anything else, including a limited field with a
+    different wrong value, is a new failure.
+    """
+    limited = set(expected.get("known_limit_fields", [])) if "known_limit" in expected else set()
+    explained = {field for field in limited if result[field] is None}
+    if limited and result["status"] == "needs_review":
+        explained.add("status")
+    return [key for key in (*FIELDS, "status")
+            if key in expected and result[key] != expected[key] and key not in explained]
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Score the real model on labelled evaluation invoices")
     parser.add_argument("--runs", type=int, default=3, help="Runs per invoice, to expose inconsistency")
@@ -48,13 +63,14 @@ def main(argv=None) -> int:
         false_ready = sum(1 for result, diff in zip(runs, mismatches) if diff and result["status"] == "ready")
         passed = sum(1 for diff in mismatches if not diff)
         known_limit = labels[name].get("known_limit")
-        totals.update(runs=len(runs), passed=passed, false_ready=false_ready,
-                      known_limit=(len(runs) - passed) if known_limit else 0)
+        limited = sum(1 for result, diff in zip(runs, mismatches)
+                      if diff and not unexplained_mismatches(labels[name], result))
+        totals.update(runs=len(runs), passed=passed, false_ready=false_ready, known_limit=limited)
 
         flag = "FALSE READY" if false_ready else ("ok" if passed == len(runs) else "mismatch")
-        if known_limit and not false_ready:
+        if known_limit and not false_ready and passed + limited == len(runs):
             # A pinned limit is expected to mismatch; if it starts passing, the limit is gone.
-            flag = f"known limit: {known_limit}" if passed < len(runs) else "ok (known limit no longer reproduces)"
+            flag = f"known limit: {known_limit}" if limited else "ok (known limit no longer reproduces)"
         print(f"{name:42} {passed}/{len(runs)} {flag}")
         for diff, result in zip(mismatches, runs):
             for line in diff:

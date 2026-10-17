@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from evaluate import unexplained_mismatches
 from solution import FIELDS, process_invoice
 
 EVAL_DIR = Path(__file__).resolve().parent / "eval_invoices"
@@ -79,12 +80,31 @@ class CarefulModelTests(unittest.TestCase):
                 result = run(name, careful_reply(name))
 
                 if "known_limit" in label:
-                    # Pinned: labelled with the true answer, but known to go to review.
+                    # Pinned: labelled with the true answer, but known to go to review. Only the
+                    # fields the limit names may differ; every other labelled field must match.
                     self.assertEqual(result["status"], "needs_review", label["known_limit"])
+                    self.assertEqual(unexplained_mismatches(label, result), [])
                     continue
                 for key in (*FIELDS, "status"):
                     if key in label:
                         self.assertEqual(result[key], label[key], key)
+
+    def test_known_limit_pin_still_checks_the_fields_it_does_not_cover(self):
+        name = "e24_email_sentence_with_order.txt"
+        reply = json.loads(careful_reply(name))
+        reply["currency"] = {"value": None, "status": "missing", "reason": "", "candidates": []}
+
+        result = run(name, json.dumps(reply))
+
+        self.assertEqual(unexplained_mismatches(LABELS[name], result), ["currency"])
+
+    def test_known_limit_explains_only_a_rejected_field(self):
+        # A limited field that comes back with a different wrong value is a new failure.
+        label = LABELS["e24_email_sentence_with_order.txt"]
+        result = {**{field: label[field] for field in FIELDS}, "invoice_number": "LDF-2026-15",
+                  "status": "ready", "issues": []}
+
+        self.assertEqual(unexplained_mismatches(label, result), ["invoice_number"])
 
     def test_ready_invoices_are_ready_with_no_issues(self):
         for name, label in LABELS.items():
