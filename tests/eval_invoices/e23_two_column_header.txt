@@ -1,0 +1,10 @@
+SYNTHETIC EVALUATION INVOICE
+
+Bill to: Cypress Demo Clinic        From: Alder Demo Medical Supply
+Invoice no: ADM-5150                Invoice date: 2026-09-30
+Due date: 2026-10-30                Currency: CAD
+
+Gloves (box of 100)                          12.00
+Subtotal                                     12.00
+GST 5%                                        0.60
+Total (incl. GST)                            12.60

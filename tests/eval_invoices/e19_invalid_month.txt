@@ -1,0 +1,8 @@
+SYNTHETIC EVALUATION INVOICE
+
+Indigo Demo Signs
+Invoice IDS-600
+Date: 2026-13-01
+
+Shop sign                  95.00
+Total due (USD)            95.00

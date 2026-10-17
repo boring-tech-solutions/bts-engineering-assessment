@@ -1,0 +1,10 @@
+SYNTHETIC EVALUATION INVOICE
+
+Maple Demo Hardware
+Sales receipt
+Order: 4471
+Date: 2026-02-14
+
+Hammer                      18.00
+Nails (box)                  6.50
+Total                       24.50 CAD

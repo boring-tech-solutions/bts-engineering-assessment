@@ -1,0 +1,13 @@
+SYNTHETIC EVALUATION INVOICE
+
+INVOICE TO: Sapphire Demo Dental Clinic
+            300 Example Blvd, Victoria BC
+
+Invoice ref: 2026-0815-A
+Date of invoice: 2026-08-15
+
+Appointment reminder cards (500)    150.00
+Shipping                             12.00
+Amount due                          162.00 CAD
+
+Remit payment to: Cedar Demo Print Shop, 9 Mock Lane, Victoria BC

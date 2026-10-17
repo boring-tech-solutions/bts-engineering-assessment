@@ -1,0 +1,9 @@
+SYNTHETIC EVALUATION INVOICE
+
+Quill Demo Stationery
+Invoice QS-881   Date: 2026-07-19   Currency: CAD
+
+Notebooks (25)               125.50
+Total due                    125.50
+
+Please pay $125.5 by 2026-08-18.

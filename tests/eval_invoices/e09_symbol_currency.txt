@@ -1,0 +1,7 @@
+SYNTHETIC EVALUATION INVOICE
+
+Tamarack Demo Bakery
+Invoice TB-0005 | 2026-09-02
+
+Bread order                C$ 45.00
+Total                      CA$45.00

@@ -1,0 +1,9 @@
+SYNTHETIC EVALUATION INVOICE
+
+Invoice from: Harbour Demo Marine Services
+Invoice for:  Harbour Demo Marine Services Holdings
+
+Invoice: HMS-1000
+Date: 2026-02-27
+Hull inspection                  275.00
+Total payable (AUD)              275.00

@@ -1,0 +1,10 @@
+SYNTHETIC EVALUATION INVOICE
+
+Hemlock Demo Repairs
+Invoice HR-118    Date 2026-06-11    Currency: USD
+
+Labour                          180.00
+Parts                            40.00
+Invoice total                   220.00
+Payment received (deposit)     -100.00
+Balance due                     120.00

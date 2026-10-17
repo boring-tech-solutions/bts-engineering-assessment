@@ -1,0 +1,87 @@
+"""Live evaluation: run process_invoice on labelled invoices with the real model and score it.
+
+Makes real API calls (one per invoice per run). The most important number is
+false_ready: results marked "ready" that disagree with the label, because no
+human would look at them again.
+"""
+
+import argparse
+import json
+import sys
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+from solution import FIELDS, process_invoice
+
+EVAL_DIR = Path(__file__).with_name("tests") / "eval_invoices"
+
+
+def score(expected: dict, result: dict) -> list[str]:
+    """Return one line per labelled key where the result disagrees with the label."""
+    return [
+        f"{key}: expected {expected[key]!r}, got {result[key]!r}"
+        for key in (*FIELDS, "status")
+        if key in expected and result[key] != expected[key]
+    ]
+
+
+def unexplained_mismatches(expected: dict, result: dict) -> list[str]:
+    """Labelled keys that disagree with the label and are not explained by its known limit.
+
+    A known limit explains a field in known_limit_fields coming back as None, and the
+    status coming back as needs_review. Anything else, including a limited field with a
+    different wrong value, is a new failure.
+    """
+    limited = set(expected.get("known_limit_fields", [])) if "known_limit" in expected else set()
+    explained = {field for field in limited if result[field] is None}
+    if limited and result["status"] == "needs_review":
+        explained.add("status")
+    return [key for key in (*FIELDS, "status")
+            if key in expected and result[key] != expected[key] and key not in explained]
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Score the real model on labelled evaluation invoices")
+    parser.add_argument("--runs", type=int, default=3, help="Runs per invoice, to expose inconsistency")
+    parser.add_argument("--only", nargs="*", default=[], help="Evaluate only these file names")
+    parser.add_argument("--show-issues", action="store_true", help="Print issues for every mismatching run")
+    args = parser.parse_args(argv)
+
+    labels = json.loads((EVAL_DIR / "expected.json").read_text(encoding="utf-8"))
+    names = [name for name in labels if not name.startswith("_") and (not args.only or name in args.only)]
+    jobs = [(name, run) for name in names for run in range(args.runs)]
+    texts = {name: (EVAL_DIR / name).read_text(encoding="utf-8") for name in names}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda job: process_invoice(texts[job[0]]), jobs))
+
+    totals = Counter()
+    for name in names:
+        runs = [result for (job_name, _), result in zip(jobs, results) if job_name == name]
+        mismatches = [score(labels[name], result) for result in runs]
+        false_ready = sum(1 for result, diff in zip(runs, mismatches) if diff and result["status"] == "ready")
+        passed = sum(1 for diff in mismatches if not diff)
+        known_limit = labels[name].get("known_limit")
+        limited = sum(1 for result, diff in zip(runs, mismatches)
+                      if diff and not unexplained_mismatches(labels[name], result))
+        totals.update(runs=len(runs), passed=passed, false_ready=false_ready, known_limit=limited)
+
+        flag = "FALSE READY" if false_ready else ("ok" if passed == len(runs) else "mismatch")
+        if known_limit and not false_ready and passed + limited == len(runs):
+            # A pinned limit is expected to mismatch; if it starts passing, the limit is gone.
+            flag = f"known limit: {known_limit}" if limited else "ok (known limit no longer reproduces)"
+        print(f"{name:42} {passed}/{len(runs)} {flag}")
+        for diff, result in zip(mismatches, runs):
+            for line in diff:
+                print(f"    - {line}")
+            if diff and args.show_issues:
+                print(f"      issues: {result['issues']}")
+
+    print(f"\npassed {totals['passed']}/{totals['runs']} runs, false_ready={totals['false_ready']}, "
+          f"known_limit_runs={totals['known_limit']}")
+    return 1 if totals["false_ready"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

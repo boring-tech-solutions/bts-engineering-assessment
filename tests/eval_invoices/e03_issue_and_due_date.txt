@@ -1,0 +1,10 @@
+SYNTHETIC EVALUATION INVOICE
+
+Willowbank Demo Studio
+Invoice #: WDS/0412
+Invoice date: 2026-07-01
+Due date: 2026-07-31
+Client: Quartz Demo Partners
+
+Photography session              350.00
+Amount payable: EUR 350.00

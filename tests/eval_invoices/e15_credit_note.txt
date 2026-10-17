@@ -1,0 +1,8 @@
+SYNTHETIC EVALUATION INVOICE
+
+Pine Demo Outfitters
+CREDIT NOTE CN-0042
+Date: 2026-06-30
+
+Refund for returned tent         -45.00
+Total: -45.00 CAD
